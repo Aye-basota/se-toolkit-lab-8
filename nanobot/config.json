@@ -1,0 +1,42 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "./workspace",
+      "model": "coder-model",
+      "provider": "custom",
+      "max_tokens": 8192,
+      "context_window_tokens": 65536,
+      "temperature": 0.1,
+      "max_tool_iterations": 40
+    }
+  },
+  "channels": {
+    "webchat": {
+      "enabled": true,
+      "allow_from": ["*"]
+    }
+  },
+  "providers": {
+    "custom": {
+      "api_key": "_AVgrAm3Eqq73P39av5pg9Qloo9C4637gDVu1Gkb7V01ceh3H36JC4nZ82fEiIFjHQlxJOEDOxBRilIEPpnG_w",
+      "api_base": "http://localhost:42005/v1"
+    }
+  },
+  "gateway": {
+    "host": "0.0.0.0",
+    "port": 18790
+  },
+  "tools": {
+    "mcp_servers": {
+      "lms": {
+        "command": "python",
+        "args": ["-m", "mcp_lms"],
+        "env": {
+          "NANOBOT_LMS_BACKEND_URL": "http://localhost:42002",
+          "NANOBOT_LMS_API_KEY": "lms-api-key-secret-123"
+        },
+        "tool_timeout": 30
+      }
+    }
+  }
+}

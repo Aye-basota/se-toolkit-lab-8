@@ -38,6 +38,24 @@ class _TopLearnersQuery(_LabQuery):
     )
 
 
+class _LogsSearchQuery(BaseModel):
+    query: str = Field(default="*", description="LogsQL query string (e.g., 'error', 'service:backend')")
+    limit: int = Field(default=10, ge=1, le=100, description="Max log entries to return (default 10, max 100)")
+
+
+class _LogsErrorCountQuery(BaseModel):
+    minutes: int = Field(default=60, ge=1, le=1440, description="Time window in minutes (default 60, max 24h)")
+
+
+class _TracesListQuery(BaseModel):
+    service: str = Field(default="Learning Management Service", description="Service name to filter traces")
+    limit: int = Field(default=10, ge=1, le=50, description="Max traces to return (default 10, max 50)")
+
+
+class _TracesGetQuery(BaseModel):
+    trace_id: str = Field(description="Trace ID to fetch (hex string, e.g., '7e2ea238b0d2f16c00f911c2f5dd575c')")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -113,6 +131,115 @@ async def _sync_pipeline(_args: _NoArgs) -> list[TextContent]:
 
 
 # ---------------------------------------------------------------------------
+# Observability tool handlers (VictoriaLogs + VictoriaTraces)
+# ---------------------------------------------------------------------------
+
+_VICTORIALOGS_URL = os.environ.get("VICTORIALOGS_URL", "http://localhost:42010")
+_VICTORIATRACES_URL = os.environ.get("VICTORIATRACES_URL", "http://localhost:42011")
+
+
+async def _logs_search(args: _LogsSearchQuery) -> list[TextContent]:
+    """Search logs in VictoriaLogs using LogsQL."""
+    import httpx
+
+    url = f"{_VICTORIALOGS_URL}/select/logsql/query"
+    params = {"query": args.query, "limit": args.limit}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        lines = resp.text.strip().split("\n") if resp.text.strip() else []
+
+    # Parse JSON lines
+    results = []
+    for line in lines:
+        if line.strip():
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                results.append({"_msg": line})
+
+    return [TextContent(type="text", text=json.dumps({"query": args.query, "count": len(results), "logs": results}, indent=2, ensure_ascii=False))]
+
+
+async def _logs_error_count(args: _LogsErrorCountQuery) -> list[TextContent]:
+    """Count errors per service over a time window."""
+    import httpx
+    from datetime import datetime, timedelta
+
+    # Calculate time range
+    end = datetime.utcnow()
+    start = end - timedelta(minutes=args.minutes)
+
+    # Query VictoriaLogs for errors
+    url = f"{_VICTORIALOGS_URL}/select/logsql/query"
+    query = f"severity:ERROR | stats by (service.name) count() | sort by (count) desc"
+    params = {"query": query, "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        lines = resp.text.strip().split("\n") if resp.text.strip() else []
+
+    # Parse results
+    results = []
+    for line in lines:
+        if line.strip():
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
+    return [TextContent(type="text", text=json.dumps({
+        "time_window_minutes": args.minutes,
+        "start": start.isoformat() + "Z",
+        "end": end.isoformat() + "Z",
+        "error_counts": results
+    }, indent=2, ensure_ascii=False))]
+
+
+async def _traces_list(args: _TracesListQuery) -> list[TextContent]:
+    """List recent traces for a service."""
+    import httpx
+
+    # VictoriaTraces API for listing traces
+    url = f"{_VICTORIATRACES_URL}/api/v1/traces"
+    params = {"service": args.service, "limit": args.limit}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, params=params, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                # Fallback: return info about the service
+                data = {"info": f"Traces for service '{args.service}'", "note": "Query VictoriaTraces UI for details"}
+        except Exception as e:
+            data = {"error": str(e), "note": "VictoriaTraces API may use different endpoint"}
+
+    return [TextContent(type="text", text=json.dumps(data, indent=2, ensure_ascii=False))]
+
+
+async def _traces_get(args: _TracesGetQuery) -> list[TextContent]:
+    """Fetch a specific trace by ID."""
+    import httpx
+
+    url = f"{_VICTORIATRACES_URL}/api/v1/traces/{args.trace_id}"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(url, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                data = {"trace_id": args.trace_id, "note": "Query VictoriaTraces UI at /select/vmui for full trace details"}
+        except Exception as e:
+            data = {"trace_id": args.trace_id, "error": str(e)}
+
+    return [TextContent(type="text", text=json.dumps(data, indent=2, ensure_ascii=False))]
+
+
+# ---------------------------------------------------------------------------
 # Registry: tool name -> (input model, handler, Tool definition)
 # ---------------------------------------------------------------------------
 
@@ -183,6 +310,32 @@ _register(
     "Trigger the LMS sync pipeline. May take a moment.",
     _NoArgs,
     _sync_pipeline,
+)
+
+# Observability tools
+_register(
+    "logs_search",
+    "Search logs in VictoriaLogs using LogsQL. Use query like 'error', 'service:backend', or '*'.",
+    _LogsSearchQuery,
+    _logs_search,
+)
+_register(
+    "logs_error_count",
+    "Count errors per service over a time window. Returns error counts grouped by service name.",
+    _LogsErrorCountQuery,
+    _logs_error_count,
+)
+_register(
+    "traces_list",
+    "List recent traces for a service. Returns trace metadata for the specified service.",
+    _TracesListQuery,
+    _traces_list,
+)
+_register(
+    "traces_get",
+    "Fetch a specific trace by ID. Use trace_id from logs_search or traces_list results.",
+    _TracesGetQuery,
+    _traces_get,
 )
 
 
