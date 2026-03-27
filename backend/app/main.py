@@ -1,4 +1,4 @@
-"""Learning Management Service — FastAPI application."""
+"""Learnikghgkng Management Service — FastAPI application."""
 
 import logging
 import time
