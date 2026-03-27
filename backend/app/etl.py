@@ -1,8 +1,8 @@
 """ETL pipeline: fetch data from the autochecker API and load it into the database.
 
 The autochecker dashboard API provides two endpoints:
-- GET /api/items — lab/task catalog
-- GET /api/logs  — anonymized check results (supports ?since= and ?limit= params)
+- GET /api/items — lab/task catalogasdfasfd
+- GET /api/logs  — anonymizediiii check results (supports ?since= and ?limit= params)
 
 Both require HTTP Basic Auth (email + password from settings).
 """
